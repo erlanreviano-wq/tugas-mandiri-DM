@@ -3,9 +3,10 @@ import joblib
 import os
 import pandas as pd
 
-st.title("Mental Health - Prediction (Flexible loader)")
+st.set_page_config(page_title="Mental Health - Fixed Loader", layout="wide")
+st.title("Mental Health - Prediction (Fixed loader)")
 
-# possible model paths (first models/ then root)
+# possible model paths (check models/ first, then root)
 POSSIBLE = [
     "models/pipeline_voting.pkl",
     "models/pipeline_rf.pkl",
@@ -21,58 +22,81 @@ for p in POSSIBLE:
         found[os.path.basename(p)] = p
 
 if not found:
-    st.error("Model files not found. Expected one of:\n" + "\n".join(POSSIBLE))
-    st.write("Files in repo root:", os.listdir("."))
+    st.sidebar.error("Model files not found. Expected one of: " + ", ".join(POSSIBLE))
+    st.sidebar.write("Files in repo root:", os.listdir("."))
     st.stop()
 
 st.sidebar.write("Detected model files:")
-for k,v in found.items():
-    st.sidebar.write(f"- {k}  -> {v}")
+for k, v in found.items():
+    st.sidebar.write(f"- {k}  →  {v}")
+
+# Model selection
+default_name = "pipeline_voting.pkl" if "pipeline_voting.pkl" in found else list(found.keys())[0]
+model_choice = st.sidebar.selectbox("Model to use", list(found.keys()), index=list(found.keys()).index(default_name))
+model_path = found[model_choice]
 
 @st.cache_resource
-def load_model(path):
+def load_model_cached(path):
+    """Load model with caching to avoid repeated disk IO across reruns."""
     return joblib.load(path)
 
-choice = st.sidebar.selectbox("Model to use", list(found.keys()))
-model_path = found[choice]
-
-if st.button("Load model"):
+# Load model on button click and store in session_state so it persists across reruns
+if st.sidebar.button("Load model"):
     try:
-        model = load_model(model_path)
-        st.success(f"Model loaded from {model_path}")
-        st.write("Pipeline steps:", getattr(model, "named_steps", {}).keys())
+        model = load_model_cached(model_path)
+        st.session_state['model'] = model
+        st.session_state['model_path'] = model_path
+        st.sidebar.success(f"Model loaded and saved in session: {model_path}")
     except Exception as e:
-        st.exception(e)
+        st.sidebar.error("Load failed: " + str(e))
+
+# Show loaded model status
+if 'model' in st.session_state:
+    st.sidebar.info("Model in session: " + st.session_state.get('model_path', 'unknown'))
+else:
+    st.sidebar.warning("No model loaded. Click 'Load model' to load it into session.")
 
 st.header("Predict (manual inputs)")
-if st.checkbox("Show sample input form"):
-    with st.form("f"):
-        age = st.number_input("Age", value=25)
-        screen = st.number_input("Daily_Screen_Time(hrs)", value=2.5)
-        sleep = st.number_input("Sleep_Quality(1-10)", value=7.0)
-        stress = st.number_input("Stress_Level(1-10)", value=4.0)
-        days_without = st.number_input("Days_Without_Social_Media", value=1)
-        exercise = st.number_input("Exercise_Frequency(week)", value=2)
-        gender = st.text_input("Gender", value="Female")
-        platform = st.text_input("Social_Media_Platform", value="Instagram")
-        submit = st.form_submit_button("Predict")
+with st.expander("Show / Edit sample input form"):
+    with st.form("input_form"):
+        Age = st.number_input("Age", value=25)
+        Daily_Screen_Time = st.number_input("Daily_Screen_Time(hrs)", value=2.5, format="%.2f")
+        Sleep_Quality = st.number_input("Sleep_Quality(1-10)", value=7.0, format="%.2f")
+        Stress_Level = st.number_input("Stress_Level(1-10)", value=4.0, format="%.2f")
+        Days_Without_Social_Media = st.number_input("Days_Without_Social_Media", value=1)
+        Exercise_Frequency = st.number_input("Exercise_Frequency(week)", value=2)
+        Gender = st.selectbox("Gender", ["Female", "Male", "Other"], index=0)
+        Social_Media_Platform = st.text_input("Social_Media_Platform", value="Instagram")
+        submitted = st.form_submit_button("Predict")
 
-    if submit:
-        if 'model' not in locals():
+    if submitted:
+        if 'model' not in st.session_state:
             st.warning("Please click 'Load model' first.")
         else:
-            df = pd.DataFrame([{
-                "Age": age,
-                "Daily_Screen_Time(hrs)": screen,
-                "Sleep_Quality(1-10)": sleep,
-                "Stress_Level(1-10)": stress,
-                "Days_Without_Social_Media": days_without,
-                "Exercise_Frequency(week)": exercise,
-                "Gender": gender,
-                "Social_Media_Platform": platform
+            model = st.session_state['model']
+            input_df = pd.DataFrame([{
+                "Age": Age,
+                "Daily_Screen_Time(hrs)": Daily_Screen_Time,
+                "Sleep_Quality(1-10)": Sleep_Quality,
+                "Stress_Level(1-10)": Stress_Level,
+                "Days_Without_Social_Media": Days_Without_Social_Media,
+                "Exercise_Frequency(week)": Exercise_Frequency,
+                "Gender": Gender,
+                "Social_Media_Platform": Social_Media_Platform
             }])
             try:
-                pred = model.predict(df)[0]
+                pred = model.predict(input_df)[0]
                 st.success(f"Predicted: {pred}")
+                try:
+                    proba = model.predict_proba(input_df)[0]
+                    st.write("Prediction probabilities:", proba)
+                except Exception:
+                    # some models may not implement predict_proba
+                    pass
             except Exception as e:
-                st.exception(e)
+                st.error("Prediction failed: " + str(e))
+
+st.markdown("---")
+st.write("Selected model path:", model_path)
+if 'model' in st.session_state:
+    st.write("Model loaded from session:", st.session_state.get('model_path'))
